@@ -13,8 +13,8 @@
     <!-- Description of the plugin displayed on the Plugin Page and IDE Plugin Manager.
          Guidelines: https://plugins.jetbrains.com/docs/marketplace/best-practices-for-listing.html#plugin-description -->
     <description><![CDATA[
-        leo terminal link filter plugin <br>
-        <em>主要为适配 frida 输出的 StackTrace 日志</em>
+        Android Studio terminal link filter plugin. <br>
+        <em>主要用于在 Android Studio 中适配 Frida 输出的 StackTrace 日志，并跳转到反编译或混淆后的 Java 源码。</em>
     ]]></description>
 
     <!-- Product and plugin compatibility requirements.

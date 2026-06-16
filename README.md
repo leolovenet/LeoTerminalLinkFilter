@@ -1,10 +1,10 @@
 # LeoTerminalLinkFilter
 
-LeoTerminalLinkFilter is a JetBrains IDE plugin that turns selected terminal or console stack trace output into clickable source links. It is mainly built for Frida-style StackTrace logs where the emitted path and method names may come from decompiled or obfuscated Java sources.
+LeoTerminalLinkFilter is an Android Studio plugin that turns selected terminal or console stack trace output into clickable source links. It is mainly built for Android reverse engineering and debugging workflows that use Frida-style StackTrace logs, especially when the emitted path and method names come from decompiled or obfuscated Java sources.
 
 ## What It Does
 
-- Registers a custom `ConsoleFilterProvider` for JetBrains IDE consoles.
+- Registers a custom `ConsoleFilterProvider` for Android Studio and IntelliJ Platform consoles.
 - Detects stack trace lines that contain a source path, class/method name, source file name, and optional overload markers.
 - Resolves the target Java source file from the current project content roots.
 - Falls back to fuzzy matching when the exact emitted path does not exist in the project.
@@ -49,7 +49,7 @@ Requirements:
 
 - JDK 21
 - Gradle Wrapper included in this repository
-- IntelliJ IDEA 2025.1 compatible SDK, downloaded by the IntelliJ Platform Gradle Plugin
+- Android Studio or IntelliJ Platform compatible SDK, downloaded by the IntelliJ Platform Gradle Plugin
 
 Useful commands:
 
@@ -79,4 +79,4 @@ src/main/resources/META-INF/
 
 ## Notes
 
-This plugin is intentionally narrow in scope: it focuses on making Frida/decompiled stack trace output easier to navigate while analyzing Java sources inside JetBrains IDEs.
+This plugin is intentionally narrow in scope: it focuses on making Frida/decompiled stack trace output easier to navigate while analyzing Android Java sources inside Android Studio.

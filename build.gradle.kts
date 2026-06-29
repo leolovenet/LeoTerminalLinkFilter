@@ -5,7 +5,7 @@ plugins {
 }
 
 group = "com.leolovenet"
-version = "1.0.1"
+version = "1.0.2"
 
 repositories {
     mavenCentral()
@@ -33,7 +33,7 @@ intellijPlatform {
         }
 
         changeNotes = """
-            Improve method navigation for edited sources, package-private methods, constructors, overload links, and file cache behavior.
+            Add Frida stack trace helper, signature-aware current-frame navigation, #line source formatting, and overload link preservation.
         """.trimIndent()
     }
 }

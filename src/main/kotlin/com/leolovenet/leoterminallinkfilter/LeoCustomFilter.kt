@@ -2,16 +2,18 @@ package com.leolovenet.leoterminallinkfilter
 
 import com.intellij.execution.filters.Filter
 import com.intellij.execution.filters.Filter.ResultItem
+import com.intellij.execution.filters.HyperlinkInfo
 import com.intellij.execution.filters.OpenFileHyperlinkInfo
 import com.intellij.openapi.fileEditor.FileDocumentManager
+import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.roots.ProjectRootManager
 import com.intellij.openapi.vfs.VfsUtil
 import com.intellij.openapi.vfs.VirtualFile
 
 class LeoCustomFilter(private val project: Project) : Filter {
-    private val filePath2TargetFileCache = mutableMapOf<String, VirtualFile?>()
-    private val filePathAndMethod2LineNumberCache = mutableMapOf<String, List<Int>>()
+    private val logger = Logger.getInstance(LeoCustomFilter::class.java)
+    private val targetFileCache = mutableMapOf<String, VirtualFile>()
 
     //`        at com/abc/def/ghi/j    xxx    (Test.java:5)`
     //` L23    at sources/com/abc/def/ghi/j.java  com.vivo.hybrid.main.c#a  (SourceFile)  [overloads: 1|2|3|4|5|6|7]`
@@ -20,37 +22,34 @@ class LeoCustomFilter(private val project: Project) : Filter {
     override fun applyFilter(line: String, entireLength: Int): Filter.Result? {
         val matchResult = regex.find(line) ?: return null // 如果没有匹配，返回 null
 
+        val classAndMethod = matchResult.groupValues[2].split("#", limit = 2)
         val fileInfo = FileInfo(
             path = matchResult.groupValues[1],
-            clazzName = matchResult.groupValues[2].split("#").first(),
-            methodName = matchResult.groupValues[2].split("#").last(),
+            clazzName = classAndMethod.first(),
+            methodName = classAndMethod.getOrElse(1) { "" },
             sourceName = matchResult.groupValues[3].split(":").first(),
-            overloads = if (matchResult.groupValues.size > 4 && matchResult.groupValues[4].isNotEmpty()) {
-                matchResult.groupValues[4].split("|")
-            } else {
-                emptyList()
-            }
+            overloads = parseOverloads(matchResult)
         )
+        logger.debug("LeoTerminalLinkFilter matched line: path=${fileInfo.path}, class=${fileInfo.clazzName}, method=${fileInfo.methodName}, source=${fileInfo.sourceName}, overloads=${fileInfo.overloads.size}")
 
-        var targetFile = filePath2TargetFileCache[fileInfo.path]
-        if ((targetFile == null && !filePath2TargetFileCache.containsKey(fileInfo.path)) || (targetFile != null && !targetFile.exists())) {
+        var targetFile = targetFileCache[fileInfo.cacheKey]
+        if (targetFile == null || !targetFile.exists()) {
             targetFile = findExactMatch(fileInfo)
             if (targetFile == null) {
                 targetFile = findFuzzyMatch(fileInfo)
             }
-            filePath2TargetFileCache[fileInfo.path] = targetFile
+            if (targetFile != null) {
+                targetFileCache[fileInfo.cacheKey] = targetFile
+            }
         }
+        logger.debug("LeoTerminalLinkFilter resolved target file: ${targetFile?.path ?: "null"}")
 
         val resultItems = mutableListOf<ResultItem>()
         if (targetFile != null) {
-            val lineNumbers = filePathAndMethod2LineNumberCache[fileInfo.path + "#" + fileInfo.methodName]
-                ?: run {
-                    val lns = findMethodLineNumber(targetFile, fileInfo.methodName)
-//                    filePathAndMethod2LineNumberCache[fileInfo.path + "#" + fileInfo.methodName] = lns
-                    lns
-                }
-            for ((idx, ln) in lineNumbers.withIndex()) {
-                val hyperlinkInfo = OpenFileHyperlinkInfo(project, targetFile, ln)
+            val lineNumbers = findMethodLineNumber(targetFile, fileInfo)
+            logger.debug("LeoTerminalLinkFilter method line candidates: ${lineNumbers.joinToString()}")
+            for ((idx, _) in lineNumbers.withIndex()) {
+                val hyperlinkInfo = MethodHyperlinkInfo(targetFile, fileInfo, idx)
                 if (idx == 0) {
                     // 计算链接在原始行中的高亮范围
                     val range = matchResult.groups[1]!!.range
@@ -60,32 +59,38 @@ class LeoCustomFilter(private val project: Project) : Filter {
                 }
                 if (lineNumbers.size > 1 && fileInfo.overloads.size > idx) {
                     // 计算链接在原始行中的高亮范围
-                    val ns = fileInfo.overloads[idx]
-                    val baseOffset = entireLength - line.length + matchResult.groups[4]!!.range.first
-                    val startOffset = baseOffset + fileInfo.overloads.take(idx + 1).joinToString("|").length - ns.length
-                    val endOffset = startOffset + ns.length
+                    val overload = fileInfo.overloads[idx]
+                    val startOffset = entireLength - line.length + overload.range.first
+                    val endOffset = entireLength - line.length + overload.range.last + 1
                     resultItems.add(ResultItem(startOffset, endOffset, hyperlinkInfo))
                 }
             }
         }
+        logger.debug("LeoTerminalLinkFilter result item count: ${resultItems.size}")
         return if (resultItems.isNotEmpty()) Filter.Result(resultItems) else null
     }
 
-    private fun findMethodLineNumber(file: VirtualFile, method: String): List<Int> {
+    private fun findMethodLineNumber(file: VirtualFile, info: FileInfo): List<Int> {
         val document = FileDocumentManager.getInstance().getDocument(file) ?: return listOf(0)
         val lines = document.text.lines()
 
-        // 匹配方法定义（Java/Kotlin 均可）
+        // 普通方法必须有返回类型；构造函数没有返回类型，但名称必须匹配类短名。
         val methodDefRegex = Regex(
-            """^\s*(?:(public|protected|private|static|final|abstract|synchronized|native|\/\*.*\*\/)\s+)+(?:[\w\$\.\[\]\<\>\,]+\s+)+\b([A-Za-z_][\w\$]*)\s*\([^;]*$""",
+            """^\s*(?:(?:public|protected|private|static|final|abstract|synchronized|native|strictfp|\/\*.*\*\/)\s+)*(?:<[^>]+>\s+)?(?:(?!(?:public|protected|private|static|final|abstract|synchronized|native|strictfp)\b)[\w\$\.\[\]\<\>\?,]+\s+)+\b([A-Za-z_][\w\$]*)\s*\([^;]*$""",
+        )
+        val constructorDefRegex = Regex(
+            """^\s*(?:(?:public|protected|private|strictfp|\/\*.*\*\/)\s+)*(?:<[^>]+>\s+)?\b([A-Za-z_][\w\$]*)\s*\([^;]*$""",
         )
 
         val lineNumbers = mutableListOf<Int>()
         for ((index, line) in lines.withIndex()) {
-            val match = methodDefRegex.find(line) ?: continue
-            val definedName = match.groupValues[2]
+            val methodMatch = methodDefRegex.find(line)
+            val constructorMatch = constructorDefRegex.find(line)
+            val definedName = methodMatch?.groupValues?.get(1)
+                ?: constructorMatch?.groupValues?.get(1)?.takeIf { info.isConstructor && it == info.clazzShortName }
+                ?: continue
             // 直接匹配到目标方法
-            if (definedName == method) {
+            if (definedName == info.methodName || (info.isConstructor && definedName == info.clazzShortName)) {
                 lineNumbers.add(index)
                 continue
             }
@@ -102,7 +107,7 @@ class LeoCustomFilter(private val project: Project) : Filter {
                     val renameMatch = renameRegex.find(prevLine)
                     if (renameMatch != null) {
                         val originalName = renameMatch.groupValues[1]
-                        if (originalName == method || originalName.split(Regex("""[,\s/]+""")).contains(method)) {
+                        if (originalName == info.methodName || originalName.split(Regex("""[,\s/]+""")).contains(info.methodName)) {
                             lineNumbers.add(index)
                             break
                         } else {
@@ -113,6 +118,15 @@ class LeoCustomFilter(private val project: Project) : Filter {
             }
         }
         return if (lineNumbers.isEmpty()) listOf(0) else lineNumbers
+    }
+
+    private fun parseOverloads(matchResult: MatchResult): List<Overload> {
+        val overloadsGroup = matchResult.groups[4] ?: return emptyList()
+        return Regex("""\d+""").findAll(overloadsGroup.value).map { overloadMatch ->
+            val start = overloadsGroup.range.first + overloadMatch.range.first
+            val end = overloadsGroup.range.first + overloadMatch.range.last
+            Overload(start..end)
+        }.toList()
     }
 
     private fun findExactMatch(info: FileInfo): VirtualFile? {
@@ -239,12 +253,29 @@ class LeoCustomFilter(private val project: Project) : Filter {
         return null
     }
 
+    private inner class MethodHyperlinkInfo(
+        private val file: VirtualFile,
+        private val info: FileInfo,
+        private val overloadIndex: Int
+    ) : HyperlinkInfo {
+        override fun navigate(project: Project) {
+            val latestLineNumbers = findMethodLineNumber(file, info)
+            val lineNumber = latestLineNumbers.getOrElse(overloadIndex) { latestLineNumbers.firstOrNull() ?: 0 }
+            OpenFileHyperlinkInfo(project, file, lineNumber).navigate(project)
+        }
+    }
+
     private data class Match(val file: VirtualFile, val score: Int)
+    private data class Overload(val range: IntRange)
     private data class FileInfo(
         val path: String,
         val clazzName: String,
         val methodName: String,
         val sourceName: String,
-        val overloads: List<String>
-    )
+        val overloads: List<Overload>
+    ) {
+        val clazzShortName: String = clazzName.substringAfterLast('.').substringAfterLast('$')
+        val isConstructor: Boolean = methodName == "<init>" || methodName == clazzShortName
+        val cacheKey: String = listOf(path, clazzName, sourceName).joinToString("#")
+    }
 }

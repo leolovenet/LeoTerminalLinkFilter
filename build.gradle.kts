@@ -5,7 +5,7 @@ plugins {
 }
 
 group = "com.leolovenet"
-version = "1.0-SNAPSHOT"
+version = "1.0.1"
 
 repositories {
     mavenCentral()
@@ -33,7 +33,7 @@ intellijPlatform {
         }
 
         changeNotes = """
-            Initial version
+            Improve method navigation for edited sources, package-private methods, constructors, overload links, and file cache behavior.
         """.trimIndent()
     }
 }
